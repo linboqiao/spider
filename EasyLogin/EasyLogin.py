@@ -1,5 +1,8 @@
 # coding:utf-8
-from __future__ import with_statement
+
+# TODO:
+#   support file upload
+#   more document is also needed
 
 try:
     from urllib.parse import urlencode, quote, unquote
@@ -15,12 +18,8 @@ from bs4 import BeautifulSoup
 import hashlib
 from collections import OrderedDict
 import json
-try:
-    import cchardet as chardet
-except: # pragma: no cover
-    import chardet
 
-__version__ = 20180118
+__version__ = 20170719
 
 UALIST = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_9_3) AppleWebKit/537.75.14 (KHTML, like Gecko) Version/7.0.3 Safari/7046A194A",
@@ -44,18 +43,13 @@ def mymd5(input):
     else:
         return hashlib.md5(bytes(input,encoding="utf-8")).hexdigest()
 
-class EasyLogin_ValidateFail(Exception):
-    pass
-
 class EasyLogin:
-    def __init__(self, cookie=None, cookiestring=None, cookiefile=None, proxy=None, session=None, cachedir=None):
+    def __init__(self, cookie=None, cookiestring=None, cookiefile=None, proxy=None, session=None):
         """
         example: a = EasyLogin(cookie={"PHPSESSID":"..."}, proxy="socks5://127.0.0.1:1080")
         :param cookie: a dict of cookie
         :param cookiefile: the file contain cookie which saved by get or post(save=True)
         :param proxy: the proxy to use, rememeber schema and `pip install requests[socks]`
-        :param session: requests.Session()
-        :param cachedir: where cache files should be write to
         """
         self.b = None
         self.cookiestack = []
@@ -65,9 +59,6 @@ class EasyLogin:
             self.s = session
             return
         self.s = requests.Session()
-        adapter = requests.adapters.HTTPAdapter(pool_connections=100, 
-                                            pool_maxsize=1000)
-        self.s.mount('http://', adapter)
         self.s.headers.update({'User-Agent': random.choice(UALIST)})
         if cookie is None:
             cookie = {}
@@ -76,29 +67,15 @@ class EasyLogin:
         if cookiefile is not None:
             self.cookiefile = cookiefile
             try:
-                with open(cookiefile, "rb") as fp:
-                    self.s.cookies = pickle.load(fp)
+                self.s.cookies = pickle.load(open(cookiefile, "rb"))
             except FileNotFoundError:
                 pass
-        if cachedir is None:
-            self.cachedir = ""
-        else:
-            cachedir = cachedir.replace("\\","/")
-            if not cachedir.endswith("/"):
-                cachedir = cachedir+"/"
-            if not os.path.exists(cachedir):
-                try:
-                    os.mkdir(cachedir)
-                except:
-                    if not os.path.exists(cachedir):
-                        raise
-            self.cachedir = cachedir
 
     def setcookie(self,cookiestring):
         cookie = {}
         if cookiestring is not None:
             for onecookiestring in cookiestring.split(";"):
-                tmp = onecookiestring.split("=", 1)
+                tmp = onecookiestring.split("=")
                 if len(tmp)!=2:
                     continue
                 a, b = tmp
@@ -117,7 +94,7 @@ class EasyLogin:
         return c
     cookie = property(showcookie)
 
-    def get(self, url, result=True, save=False, headers=None, o=False, cache=None, r=False, cookiestring=None,failstring=None, debug=False, fixfunction=None, **kwargs):
+    def get(self, url, result=True, save=False, headers=None, o=False, cache=None, r=False, cookiestring=None,failstring=None, debug=False):
         """
         HTTP GET method, default save soup to self.b
         :param url: a url, example: "http://ip.cn"
@@ -127,31 +104,23 @@ class EasyLogin:
         :param o: return object or just page text
         :param cache: filename to write cache, if already exists, use cache rather than really get; using cache=True to use md5(url) as cache file name
         :param failstring: if failstring occurs in text, raise an exception
-        :param fixfunction: a function receive html (bytes), output fixed html (bytes); this is useful for simple replace to fix dirty html page
         :return page text or object(o=True)
         """
         if debug:
             print(url)
         if cache is True:
             cache = mymd5(url)
-        if cache:
-            cache_filepath = self.cachedir + cache
-        if cache is not None and os.path.exists(cache_filepath): # cache exist, read from cache
-            with open(cache_filepath, "rb") as fp:
-                if o:
-                    obj = pickle.load(fp)
-                    page = obj.content
-                else:
-                    page = fp.read()
-            if result:
-                page = page.replace(b"<br>", b"\n").replace(b"<BR>", b"\n")
-                if fixfunction is not None:
-                    page = fixfunction(page)
-                self.b = BeautifulSoup(page, 'html.parser')
+        if cache is not None and os.path.exists(cache):
             if o:
+                obj = pickle.load(open(cache, "rb"))
+                if result:
+                    self.b = BeautifulSoup(obj.content.replace(b"<br>", b"\n").replace(b"<BR>", b"\n"), 'html.parser')
                 return obj
             else:
-                return page.decode(chardet.detect(page)["encoding"],errors='replace')
+                page = open(cache, "rb").read()
+                if result:
+                    self.b = BeautifulSoup(page.replace(b"<br>", b"\n").replace(b"<BR>", b"\n"), 'html.parser')
+                return page.decode(errors='replace')
         if r:
             if headers is None:
                 headers = {"Accept-Encoding": "gzip, deflate, sdch", "Accept-Language": "zh-CN,zh;q=0.8", "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8", "Upgrade-Insecure-Requests": "1", "DNT": "1"}
@@ -160,30 +129,27 @@ class EasyLogin:
             if headers is None:
                 headers = {}
             headers["Cookie"] = cookiestring
-        x = self.s.get(url, headers=headers, allow_redirects=False, proxies=self.proxies, **kwargs)
+        x = self.s.get(url, headers=headers, allow_redirects=False, proxies=self.proxies)
         if failstring is not None:
+            class EasyLogin_ValidateFail:
+                pass
             if failstring in x.text:
-                raise EasyLogin_ValidateFail(x)
+                raise EasyLogin_ValidateFail
         if result:
                 page = x.content.replace(b"<br>", b"\n").replace(b"<BR>", b"\n")
-                if fixfunction is not None:
-                    page = fixfunction(page)
                 self.b = BeautifulSoup(page, 'html.parser')
         if save:
-            with open(self.cookiefile, "wb") as fp:
-                fp.write(pickle.dumps(self.s.cookies))
+            open(self.cookiefile, "wb").write(pickle.dumps(self.s.cookies))
         if o:  # if you need object returned
             if cache is not None:
-                with open(cache_filepath, "wb") as fp:
-                    fp.write(pickle.dumps(x))
+                open(cache, "wb").write(pickle.dumps(x))
             return x
         else:
             if cache is not None:
-                with open(cache_filepath, "wb") as fp:
-                    fp.write(x.content)
+                open(cache, "wb").write(x.content)
             return x.text
 
-    def post(self, url, data, result=True, save=False, headers=None, cache=None, dont_change_cookie=False, **kwargs):
+    def post(self, url, data, result=True, save=False, headers=None, cache=None, dont_change_cookie=False):
         """
         HTTP POST method, submit data to server
         :param url: post target url
@@ -197,31 +163,25 @@ class EasyLogin:
         """
         if cache is True:
             cache = mymd5(url+data)
-        if cache:
-            cache_filepath = self.cachedir + cache
-        if cache is not None and os.path.exists(cache_filepath):
-            with open(cache_filepath, "rb") as fp:
-                obj = pickle.load(fp)
-            if result:
-                self.b = BeautifulSoup(obj.content.replace(b"<br>", b"\n").replace(b"<BR>", b"\n"), 'html.parser')
-            return obj
-        postheaders = {'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'}
-        if headers is not None:
-            postheaders.update(headers)
+        if cache is not None and os.path.exists(cache):
+                obj = pickle.load(open(cache, "rb"))
+                if result:
+                    self.b = BeautifulSoup(obj.content.replace(b"<br>", b"\n").replace(b"<BR>", b"\n"), 'html.parser')
+                return obj
+        postheaders = headers if headers is not None else \
+            {'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'}
         if dont_change_cookie:
             self.stash_cookie()
-        x = self.s.post(url, data, headers=postheaders, allow_redirects=False, proxies=self.proxies, **kwargs)
+        x = self.s.post(url, data, headers=postheaders, allow_redirects=False, proxies=self.proxies)
         if dont_change_cookie:
             self.pop_cookie()
         if result:
             page = x.content.replace(b"<br>", b"\n").replace(b"<BR>", b"\n")
             self.b = BeautifulSoup(page, 'html.parser')
         if save:
-            with open(self.cookiefile, "wb") as fp:
-                fp.write(pickle.dumps(self.s.cookies))
+            open(self.cookiefile, "wb").write(pickle.dumps(self.s.cookies))
         if cache is not None:
-            with open(cache_filepath, "wb") as fp:
-                fp.write(pickle.dumps(x))
+            open(cache, "wb").write(pickle.dumps(x))
         return x
 
     def post_dict(self, url, dict, result=True, save=False, headers=None,cache=None):
@@ -246,7 +206,7 @@ class EasyLogin:
         """
         if headers is None:
             headers={}
-        headers["Content-Type"]="application/json;charset=UTF-8"
+        headers["content-type"]="application/json;charset=UTF-8"
         data=json.dumps(jsondata)
         x=self.post(url, data, result=result, save=save, headers=headers,cache=cache)
         if o:
@@ -325,14 +285,12 @@ class EasyLogin:
         b = self.b
         self.b = None
         data = pickle.dumps(self)
-        with open(filename, "wb") as fp:
-            fp.write(data)
+        open(filename, "wb").write(data)
         self.b = b
         return
     
     export = save
     
-    @staticmethod
     def load(filename='EasyLogin.status'):
         """
         load an object from file
@@ -340,8 +298,7 @@ class EasyLogin:
         :return: the object
         """
         try:
-            with open(filename, "rb") as fp:
-                return pickle.load(fp)
+            return pickle.load(open(filename, "rb"))
         except:
             return EasyLogin()
     
@@ -386,7 +343,7 @@ class EasyLogin:
             if len(data) > 0:
                 if not ignore_pureascii_words or any([ord(i)>127 for i in data]):
                     if PY2:
-                        result.append(data.encode('utf-8'))
+                        result.append(data.encode())
                     else:
                         result.append(data)
         return result
@@ -414,10 +371,8 @@ class EasyLogin:
             if not len(data):
                 break
             del(data[0])
-        if text is True:
-            text = " "
         if text:
-            return [text.join(self.text(i)) for i in data]
+            return [self.text(i) for i in data]
         else:
             return data
 
@@ -431,12 +386,11 @@ class EasyLogin:
         """
         if self.b is None:
             return False
-        if all:
-            tags = self.b.find_all(tag,attrs=attrs)
-        else:
-            tags = [self.b.find(tag,attrs=attrs)]
+        tags=self.b.find_all(tag,attrs=attrs)
         if len(tags)==0:
             return False
+        if all == False:
+            tags = tags[0:1]
         for tag in tags:
             tag.extract()
         return True
@@ -472,7 +426,8 @@ class EasyLogin:
             return False
         self.s.cookies = self.cookiestack.pop()
 
-def main():
+
+if __name__ == '__main__':  # sample code for get ip by "http://ip.cn"
     a = EasyLogin()
     page = a.get("http://ip.cn/")
     IP, location = a.f("code", attrs={})
@@ -482,6 +437,3 @@ def main():
     print(a.css())
     print(a.js())
     print(";".join(a.text()))
-
-if __name__ == '__main__':  # sample code for get ip by "http://ip.cn"
-    main()
